@@ -17,4 +17,5 @@ export interface VideoItem {
 
 export interface SearchResponse {
   items: VideoItem[];
+  nextPageToken?: string;
 }

@@ -8,13 +8,15 @@ const API_KEY = 'AIzaSyBU4PD2kWZEKvy5dOYUDpTvjACWvBq4hPo';
 const API_URL = 'https://www.googleapis.com/youtube/v3/search';
 
 // Default terms
-const DEFAULT_INCLUDED_TERMS = ['method', 'مشكلة', 'شرح'];
-const DEFAULT_EXCLUDED_TERMS = ['paypal.me'];
+const DEFAULT_INCLUDED_TERMS = ['شرح', 'مشكلة', 'method'];
+const DEFAULT_EXCLUDED_TERMS: string[] = [];
 
 function App() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nextPageToken, setNextPageToken] = useState<string | undefined>();
+  const [currentSearchTerm, setCurrentSearchTerm] = useState('');
   const [excludedTerms, setExcludedTerms] = useState<string[]>(() => {
     const saved = localStorage.getItem('excludedTerms');
     return saved ? JSON.parse(saved) : DEFAULT_EXCLUDED_TERMS;
@@ -26,7 +28,6 @@ function App() {
   const [newExcludedTerm, setNewExcludedTerm] = useState('');
   const [newIncludedTerm, setNewIncludedTerm] = useState('');
 
-  // Save terms to localStorage whenever they change
   useEffect(() => {
     localStorage.setItem('excludedTerms', JSON.stringify(excludedTerms));
   }, [excludedTerms]);
@@ -36,21 +37,15 @@ function App() {
   }, [includedTerms]);
 
   const shouldExcludeVideo = (video: VideoItem): boolean => {
-    const titleToCheck = video.snippet.title.toLowerCase();
-    return excludedTerms.some(term => titleToCheck.includes(term.toLowerCase()));
+    if (excludedTerms.length === 0) return false;
+    const title = video.snippet.title;
+    return excludedTerms.some(term => title.includes(term));
   };
 
   const hasIncludedTerm = (video: VideoItem): boolean => {
     if (includedTerms.length === 0) return true;
-    const titleToCheck = video.snippet.title.toLowerCase();
-    return includedTerms.some(term => titleToCheck.includes(term.toLowerCase()));
-  };
-
-  const isWithinLastThreeYears = (publishedAt: string): boolean => {
-    const publishDate = new Date(publishedAt);
-    const threeYearsAgo = new Date();
-    threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3);
-    return publishDate >= threeYearsAgo;
+    const title = video.snippet.title;
+    return includedTerms.some(term => title.includes(term));
   };
 
   const addExcludedTerm = (e: React.FormEvent) => {
@@ -77,35 +72,74 @@ function App() {
     setIncludedTerms(includedTerms.filter(term => term !== termToRemove));
   };
 
-  const searchVideos = async (searchTerm: string) => {
-    setLoading(true);
-    setError(null);
-    setVideos([]);
-
+  const fetchVideos = async (searchTerm: string, pageToken?: string) => {
     try {
+      // Build search query including any included terms
+      let searchQuery = searchTerm;
+      if (includedTerms.length > 0) {
+        // Add OR operator for included terms
+        searchQuery = `${searchTerm} (${includedTerms.join(' | ')})`;
+      }
+
       const params = new URLSearchParams({
         part: 'snippet',
-        q: searchTerm,
+        q: searchQuery,
         maxResults: '50',
         type: 'video',
-        regionCode: 'MA',
         order: 'date',
         key: API_KEY,
+        relevanceLanguage: 'ar',
       });
+
+      if (pageToken) {
+        params.append('pageToken', pageToken);
+      }
 
       const response = await fetch(`${API_URL}?${params}`);
       if (!response.ok) throw new Error('Failed to fetch videos');
       
       const data: SearchResponse = await response.json();
-      const filteredVideos = data.items
-        .filter(video => 
-          isWithinLastThreeYears(video.snippet.publishedAt) && 
-          !shouldExcludeVideo(video) &&
-          hasIncludedTerm(video)
-        );
-      setVideos(filteredVideos);
+      
+      // Only apply exclude filter since include is handled in search query
+      const filteredVideos = data.items.filter(video => !shouldExcludeVideo(video));
+      return {
+        videos: filteredVideos,
+        nextPageToken: data.nextPageToken
+      };
+    } catch (err) {
+      throw err;
+    }
+  };
+
+  const searchVideos = async (searchTerm: string) => {
+    setLoading(true);
+    setError(null);
+    setVideos([]);
+    setNextPageToken(undefined);
+    setCurrentSearchTerm(searchTerm);
+
+    try {
+      const { videos: newVideos, nextPageToken: newNextPageToken } = await fetchVideos(searchTerm);
+      setVideos(newVideos);
+      setNextPageToken(newNextPageToken);
     } catch (err) {
       setError('Failed to load videos. Please try again later.');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMore = async () => {
+    if (!nextPageToken || loading || !currentSearchTerm) return;
+
+    setLoading(true);
+    try {
+      const { videos: newVideos, nextPageToken: newNextPageToken } = await fetchVideos(currentSearchTerm, nextPageToken);
+      setVideos(prevVideos => [...prevVideos, ...newVideos]);
+      setNextPageToken(newNextPageToken);
+    } catch (err) {
+      setError('Failed to load more videos. Please try again later.');
       console.error(err);
     } finally {
       setLoading(false);
@@ -119,7 +153,7 @@ function App() {
           <div className="flex items-center justify-center gap-2 mb-4">
             <Youtube className="w-8 h-8 text-red-600" />
             <h1 className="text-2xl font-bold text-gray-900">
-              YouTube Morocco Search
+              YouTube Search
             </h1>
           </div>
           <SearchBar onSearch={searchVideos} />
@@ -215,10 +249,7 @@ function App() {
 
         {!loading && !error && videos.length === 0 && (
           <div className="text-center text-gray-600">
-            <p>Enter a search term to find videos from Morocco</p>
-            <p className="text-sm mt-2 text-gray-500">
-              Only showing videos from the last 3 years
-            </p>
+            <p>Enter a search term to find videos</p>
           </div>
         )}
 
@@ -231,6 +262,17 @@ function App() {
         {loading && (
           <div className="flex justify-center mt-8">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900"></div>
+          </div>
+        )}
+
+        {!loading && nextPageToken && videos.length > 0 && (
+          <div className="flex justify-center mt-8">
+            <button
+              onClick={loadMore}
+              className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+            >
+              Load More
+            </button>
           </div>
         )}
       </main>
