@@ -1,0 +1,6 @@
+archive/
+*.zip
+monitor.py
+.bolt
+*.DS_Store
+node_modules*
